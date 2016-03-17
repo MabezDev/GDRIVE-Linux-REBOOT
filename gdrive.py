@@ -276,14 +276,14 @@ class FileManagement():
                     #overwrite online
                     print('File md5 has changed at : ',path)
                     if(self.fileExists(path)):
-                        print('uploading: ',path)
                         body = {
                             "title":title,
-                            "mimeType":fileMeta['mimeType']
+                            "mimeType":str(fileMeta['mimeType'])
                         }
-                        body['parents'] = [{id:self.currentDriveFolder}]
+                        ##Error uploading need to fix tommorrow
+                        body['parents'] = [{str(id):self.currentDriveFolder}]#str is very import else it throws a json key error
                         media_body = apiclient.http.MediaFileUpload(path,fileMeta['mimeType'],resumable=True)
-                        fileToOverWrite = DRIVE_SERVICE.files().insert(body=body,media_body=media_body).execute()
+                        DRIVE_SERVICE.files().insert(body=body,media_body=media_body).execute()
                         self.dataBase.updateRecord(fileID,localmd5,path)
                         self.filesOverwritten+=1
                     else:
