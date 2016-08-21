@@ -1,0 +1,4 @@
+Need to update database to store cloud data like parent id and file id so we can update easier and quicker (otherwise we have to iterate through the cloud to find files over and over again)
+Will also help with the detection of deletion of files in the cloud to delete them locally, (add options later to keep locally)
+
+Need to figure out how to handle the rearrangement of files within the local file store, and cloud store else we will get duplicate items (again having specific file ID's will help greatly)
