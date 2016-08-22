@@ -8,6 +8,7 @@ import oauth2client
 import apiclient
 from oauth2client import client
 from oauth2client import tools
+from mimetypes import MimeTypes
 
 from os import walk
 
@@ -79,6 +80,7 @@ class FileManagement:
         self.filesDownloaded = 0
         self.filesUploaded = 0
         self.filesOverwritten = 0
+        self.mime = MimeTypes()
         # initialize database
         self.dataBase = DataBaseManager()
         global LOCAL_FILE_REMOVED
@@ -139,7 +141,7 @@ class FileManagement:
         if not self.workingDirectory == SYNC_FOLDER:
             self.setWorkingDirectory(self.prevPath)
 
-    def localSyncAll(self, folderId):
+    def localSyncAllOld(self, folderId):
         #
         #   This should be redone to check the database no the cloud, as we sync cloud first we will always have the
         #   most up to date data
@@ -175,18 +177,20 @@ class FileManagement:
         if not self.workingDirectory == SYNC_FOLDER:
             self.setWorkingDirectory(self.prevPath)
 
-    def localSyncAllProper(self,path):
+    def localSyncAll(self,path):
         # for file in sync folder check if file is in db if not upload it and add id's and checksums to db
         # if file is folder call this function again recursively till be have checked all
         for (dirpath, dirnames, filenames) in walk(path):
-            # print "Current Directory: ", dirpath
-            # print "Files Found: "
             for file in filenames:
-                print dirpath + os.sep +file
-
+                # check file is not a hidden one
+                if not file.startswith("."):
+                    if dirpath is SYNC_FOLDER:
+                        self.localSync(SYNC_FOLDER+file)
+                    else:
+                        self.localSync(dirpath + os.sep + file)
 
     def createFolderInDrive(self, title):
-        ##redo
+        # need to implement this properly
         folder = DRIVE_SERVICE.CreateFile(
             {'title': '{0}'.format(title), 'mimeType': 'application/vnd.google-apps.folder',
              "parents": [{"kind": "drive#fileLink", "id": self.currentDriveFolder}]})
@@ -303,7 +307,7 @@ class FileManagement:
 
 
     # change this (below) to reflect the new localSyncAll proper code (local only)
-    def localSync(self, fileMeta):
+    def localSyncOld(self, fileMeta):
         fileID = fileMeta['id']
         fileCheckSum = fileMeta['md5Checksum']
         title = fileMeta['title']
@@ -327,19 +331,32 @@ class FileManagement:
                     print(title, " doesnt exists!")
                     self.dataBase.removeFromDataBase(fileID)
 
-        ''' #THIS MAKES SYNC VERY SLOW
-            #when a file has been delete locally it needs to be removed from the database
-            file_list = DRIVE_SERVICE.ListFile({'q':"'{0}' in parents and trashed=false".format(self.currentDriveFolder)}).GetList()
-            for doc in file_list:
-                if(not doc['mimeType']=="application/vnd.google-apps.folder"):
-                    if(not doc['title'] in files):
-                        #if its not in local files then remove the id from db and redownload
-                        if(self.dataBase.isInDataBase(doc['id'])):
-                            print('In drive but not local, removing {0} from database.'.format(doc['title']))
-                            self.dataBase.removeFromDataBase(doc['id'])
-            '''
+    def localSync(self,path):
+        fileID = self.dataBase.getIdFromPath(path)
+        if fileID is not None:  # If fileID returns None then it is not in the db
+            currentMd5 = self.getLocalMd5(path)
+            dbMd5 = self.dataBase.getMd5(fileID)
+            if currentMd5 != dbMd5:
+                # This file has changed update it!
+                print "A change has been detected in ", path
+                mimeType = self.mime.guess_type(path)  # Get mimeType from local file
+                mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
+                DRIVE_SERVICE.files().update(fileId=fileID, media_body=mediaBody).execute()
+                self.dataBase.updateRecord(fileID, currentMd5, path)
+                self.filesOverwritten += 1
+
+        else:
+            # New file detected, upload it here!
+            mimeType = self.mime.guess_type(path) # Get mimeType from local file
+            print "A new file detected with mimeType {} here: ".format(mimeType), path
+            body = {"title": os.path.basename(path), "mimeType": mimeType}  # add parent when we have support for it
+            mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
+            uploadedMeta = DRIVE_SERVICE.files().insert(body=body, media_body=mediaBody).execute()
+            self.dataBase.addToDataBase(uploadedMeta['id'], uploadedMeta['md5Checksum'], path)
+            self.filesUploaded += 1
 
 
+# TODO for database, add mimeType Storage, with that add folder support, so we can upload files into there correct place
 class DataBaseManager:
     def __init__(self):
         if not os.path.exists(DB_HOME):
@@ -430,7 +447,7 @@ def run():
             FM.filesDownloaded = 0
             FM.filesUploaded = 0
             FM.filesOverwritten = 0
-            time.sleep(5)
+            # time.sleep(5)
         except KeyboardInterrupt:
             break
         finally:
@@ -448,4 +465,4 @@ if __name__ == "__main__":  # load settings like filepath etc, if its not there 
     GA = Authorization()
     GA.initializeDriveService()
     FM = FileManagement()
-    FM.localSyncAllProper(SYNC_FOLDER)
+    FM.localSyncAll(SYNC_FOLDER)
