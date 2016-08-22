@@ -126,6 +126,10 @@ class FileManagement:
                     path = str(self.workingDirectory + doc['title'] + "/")
                     if not self.folderExists(path):
                         self.makeDirectory(path)
+                    # Add folder to database
+                    if not self.dataBase.isInDataBase(doc['id']):
+                        print "Folder is not in databse"
+                        self.dataBase.addToDataBase(doc, path)
                     self.totalFiles -= 1
                     self.setWorkingDirectory(path)
                     self.currentDriveFolder = doc['id']
@@ -141,17 +145,24 @@ class FileManagement:
         if not self.workingDirectory == SYNC_FOLDER:
             self.setWorkingDirectory(self.prevPath)
 
-    def localSyncAll(self,path):
+    def localSyncAll(self, path):
         # for file in sync folder check if file is in db if not upload it and add id's and checksums to db
         # if file is folder call this function again recursively till be have checked all
         for (dirpath, dirnames, filenames) in walk(path):
-            for file in filenames:
-                # check file is not a hidden one
-                if not file.startswith("."):
-                    if dirpath is SYNC_FOLDER:
-                        self.localSync(SYNC_FOLDER+file)
-                    else:
+            if dirpath is SYNC_FOLDER:
+                # Sync folder will not have a id but when we upload not using an id it will go to root
+                # print "Folder at ", dirpath, "has id: ", self.dataBase.getIdFromPath(dirpath)
+                for file in filenames:
+                    # check file is not a hidden one
+                    if not file.startswith("."):
+                        self.localSync(SYNC_FOLDER + file)
+            else:
+                # print "Folder at ", dirpath, "has id: ", self.dataBase.getIdFromPath(dirpath+ os.sep)
+                for file in filenames:
+                    if not file.startswith("."):
                         self.localSync(dirpath + os.sep + file)
+
+
 
     def createFolderInDrive(self, title):
         # need to implement this properly
@@ -180,7 +191,7 @@ class FileManagement:
         else:
             print("Error downloading file. No content detected.")
         # add to data base
-        self.dataBase.addToDataBase(fileMeta['id'], fileMeta['parents'][0]['id'], fileMeta['md5Checksum'], fullPath)
+        self.dataBase.addToDataBase(fileMeta, fullPath)
         # increase tally
         self.Downloaded += 1
 
@@ -235,7 +246,7 @@ class FileManagement:
                 local = self.dataBase.getFilePath(fileID)
                 if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5:
                     self.downloadFile(fileMeta, self.workingDirectory)
-                    self.dataBase.updateRecord(fileID, fileMeta['parents'][0]['id'], cloudMd5, local)
+                    self.dataBase.updateRecord(fileMeta, local)
                     self.filesOverwritten += 1
         else:
             # new file --> download it
@@ -263,22 +274,22 @@ class FileManagement:
                 mimeType = self.mime.guess_type(path)  # Get mimeType from local file
                 mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
                 editedFile = DRIVE_SERVICE.files().update(fileId=fileID, media_body=mediaBody).execute()
-                self.dataBase.updateRecord(fileID, editedFile['parents'][0]['id'], currentMd5, path)
+                self.dataBase.updateRecord(editedFile, path)
                 self.filesOverwritten += 1
 
         else:
             # New file detected, upload it here!
-            mimeType = self.mime.guess_type(path) # Get mimeType from local file
+            mimeType = self.mime.guess_type(path)  # Get mimeType from local file
             print "A new file detected with mimeType {} here: ".format(mimeType), path
             body = {"title": os.path.basename(path), "mimeType": mimeType}  # add parent when we have support for it
             mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
             uploadedMeta = DRIVE_SERVICE.files().insert(body=body, media_body=mediaBody).execute()
             # Replace the meta with a folder that relates to the local files position
-            self.dataBase.addToDataBase(uploadedMeta['id'], uploadedMeta['parents'][0]['id'], uploadedMeta['md5Checksum'], path)
+            self.dataBase.addToDataBase(uploadedMeta, path)
             self.filesUploaded += 1
 
 
-# TODO for database, add mimeType Storage, with that add folder support, so we can upload files into there correct place
+# TODO for database add folder support, so we can upload files into there correct place
 class DataBaseManager:
     def __init__(self):
         if not os.path.exists(DB_HOME):
@@ -289,9 +300,14 @@ class DataBaseManager:
         self.file = open(DB_FILE, "r")
         self.closeFile()
 
-    def addToDataBase(self, fileID, parentIds, md5, fullPath):
+    def addToDataBase(self, fileMeta, fullPath):
         self.openFile("a+")
-        string = str(fileID) + "," + str(parentIds) + "," + str(md5) + "," + fullPath + "\n"
+        if os.path.isfile(fullPath):
+            md5 = str(fileMeta['md5Checksum'])
+        else:
+            md5 = "NONE"
+        string = str(fileMeta['id']) + "," + str(fileMeta['parents'][0]['id']) + "," + md5 + \
+                 "," + str(fileMeta['mimeType']) + "," + fullPath + "\n"
         self.file.write(string)
         self.closeFile()
 
@@ -310,11 +326,11 @@ class DataBaseManager:
     def closeFile(self):
         self.file.close()
 
-    def updateRecord(self, fileID, parentsIds, newMd5, fullPath):
+    def updateRecord(self, fileMeta, fullPath):
         # remove it
-        self.removeFromDataBase(fileID)
+        self.removeFromDataBase(fileMeta['id'])
         # re-add it with the new md5
-        self.addToDataBase(fileID, parentsIds, newMd5, fullPath)
+        self.addToDataBase(fileMeta, fullPath)
 
     def getMd5(self, fileID):
         # find md5 in file form id
@@ -331,14 +347,15 @@ class DataBaseManager:
         for line in self.file:
             id1 = line.split(",")
             if id1[0] == fileID:
-                return id1[3].strip("\n")
+                return id1[4].strip("\n")
         self.closeFile()
 
+    # Can be used to get parent folder id's (Needs testing)
     def getIdFromPath(self, fullPath):
         self.openFile("r")
         for line in self.file:
             id1 = line.split(",")
-            if id1[3].strip("\n") == fullPath:
+            if id1[4].strip("\n") == fullPath:
                 return id1[0]
         self.closeFile()
 
@@ -348,6 +365,14 @@ class DataBaseManager:
             data = line.split(",")
             if data[0] == fileId:
                 return data[1]
+
+    def getMimeTypeFromPath(self, path):
+        self.openFile("r")
+        for line in self.file:
+            id1 = line.split(",")
+            if id1[4].strip("\n") == path:
+                return id1[3]
+        self.closeFile()
 
     def removeFromDataBase(self, fileID):
         self.openFile("r+")
@@ -391,7 +416,7 @@ if __name__ == "__main__":  # load settings like filepath etc, if its not there 
         print('Arguments given: ', sync)
         print('This argument will change the sync path')
     run()
-    #GA = Authorization()
-    #GA.initializeDriveService()
-    #FM = FileManagement()
-    #FM.localSyncAll(SYNC_FOLDER)
+    # GA = Authorization()
+    # GA.initializeDriveService()
+    # FM = FileManagement()
+    # FM.localSyncAll(SYNC_FOLDER)
