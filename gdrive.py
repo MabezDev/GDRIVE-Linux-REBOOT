@@ -126,10 +126,11 @@ class FileManagement:
                     path = str(self.workingDirectory + doc['title'] + "/")
                     if not self.folderExists(path):
                         self.makeDirectory(path)
+
                     # Add folder to database
                     if not self.dataBase.isInDataBase(doc['id']):
-                        print "Folder is not in databse"
                         self.dataBase.addToDataBase(doc, path)
+
                     self.totalFiles -= 1
                     self.setWorkingDirectory(path)
                     self.currentDriveFolder = doc['id']
@@ -151,18 +152,17 @@ class FileManagement:
         for (dirpath, dirnames, filenames) in walk(path):
             if dirpath is SYNC_FOLDER:
                 # Sync folder will not have a id but when we upload not using an id it will go to root
-                # print "Folder at ", dirpath, "has id: ", self.dataBase.getIdFromPath(dirpath)
                 for file in filenames:
                     # check file is not a hidden one
                     if not file.startswith("."):
                         self.localSync(SYNC_FOLDER + file)
             else:
                 # print "Folder at ", dirpath, "has id: ", self.dataBase.getIdFromPath(dirpath+ os.sep)
+                # Todo
+                # If folder is not in database, insert a folder on drive a add that to the database
                 for file in filenames:
                     if not file.startswith("."):
                         self.localSync(dirpath + os.sep + file)
-
-
 
     def createFolderInDrive(self, title):
         # need to implement this properly
@@ -254,16 +254,16 @@ class FileManagement:
                 if not fileMeta['mimeType'] == "application/vnd.google-apps.folder":
                     pass
                     # self.downloadGDriveFile(doc,self.workingDirectory)
-                    # not sure what to do with GDoc files yet
-                else:
-                    # We need to add folders to the db so we can use there id's to inject files in the correct places
-                    # In the cloud
-                    print "Folder detected, adding to db."
+                    # not sure what to do with GDoc files yet as they need to be implemented across
+                    # platforms
             else:
                 self.downloadFile(fileMeta, self.workingDirectory)
                 self.filesDownloaded += 1
 
     def localSync(self, path):
+        # Check if path is directory or file
+        # Upload file or insert folder accordingly
+        parentID = self.dataBase.getIdFromPath(os.path.dirname(path) + os.sep)
         fileID = self.dataBase.getIdFromPath(path)
         if fileID is not None:  # If fileID returns None then it is not in the db
             currentMd5 = self.getLocalMd5(path)
@@ -273,7 +273,8 @@ class FileManagement:
                 print "A change has been detected in ", path
                 mimeType = self.mime.guess_type(path)  # Get mimeType from local file
                 mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
-                editedFile = DRIVE_SERVICE.files().update(fileId=fileID, media_body=mediaBody).execute()
+                # replace root with the folder id for the directory
+                editedFile = DRIVE_SERVICE.files().update(fileId=fileID, folderId=parentID, media_body=mediaBody).execute()
                 self.dataBase.updateRecord(editedFile, path)
                 self.filesOverwritten += 1
 
@@ -281,7 +282,7 @@ class FileManagement:
             # New file detected, upload it here!
             mimeType = self.mime.guess_type(path)  # Get mimeType from local file
             print "A new file detected with mimeType {} here: ".format(mimeType), path
-            body = {"title": os.path.basename(path), "mimeType": mimeType}  # add parent when we have support for it
+            body = {"title": os.path.basename(path), "mimeType": mimeType, 'parents':[{"id": parentID}] }  # add parent when we have support for it
             mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
             uploadedMeta = DRIVE_SERVICE.files().insert(body=body, media_body=mediaBody).execute()
             # Replace the meta with a folder that relates to the local files position
