@@ -272,9 +272,9 @@ class FileManagement:
                 # This file has changed update it!
                 print "A change has been detected in ", path
                 mimeType = self.mime.guess_type(path)  # Get mimeType from local file
+                body = {'parents': [{"id": parentID}]}
                 mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
-                # replace root with the folder id for the directory
-                editedFile = DRIVE_SERVICE.files().update(fileId=fileID, folderId=parentID, media_body=mediaBody).execute()
+                editedFile = DRIVE_SERVICE.files().update(fileId=fileID, body=body, media_body=mediaBody).execute()
                 self.dataBase.updateRecord(editedFile, path)
                 self.filesOverwritten += 1
 
@@ -282,7 +282,7 @@ class FileManagement:
             # New file detected, upload it here!
             mimeType = self.mime.guess_type(path)  # Get mimeType from local file
             print "A new file detected with mimeType {} here: ".format(mimeType), path
-            body = {"title": os.path.basename(path), "mimeType": mimeType, 'parents':[{"id": parentID}] }  # add parent when we have support for it
+            body = {"title": os.path.basename(path), "mimeType": mimeType, 'parents': [{"id": parentID}]}
             mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
             uploadedMeta = DRIVE_SERVICE.files().insert(body=body, media_body=mediaBody).execute()
             # Replace the meta with a folder that relates to the local files position
@@ -290,7 +290,6 @@ class FileManagement:
             self.filesUploaded += 1
 
 
-# TODO for database add folder support, so we can upload files into there correct place
 class DataBaseManager:
     def __init__(self):
         if not os.path.exists(DB_HOME):

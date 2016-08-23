@@ -1,4 +1,16 @@
 Need to update database to store cloud data like parent id and file id so we can update easier and quicker (otherwise we have to iterate through the cloud to find files over and over again)
 Will also help with the detection of deletion of files in the cloud to delete them locally, (add options later to keep locally)
 
-Need to figure out how to handle the rearrangement of files within the local file store, and cloud store else we will get duplicate items (again having specific file ID's will help greatly)
+Need to figure out how to handle the rearrangement of files within the local file store,
+and cloud store else we will get duplicate items (again having specific file ID's will help greatly)
+
+Todo:
+ new function that checks the database for deleted files
+    - if the file is in the db but no longer exists in the stored path three things may have happened
+        - moved (if moved just delete and re upload in new place?)
+        - renamed   (tricky as our current methods (path and id) wil not work, perhaps the md5hash,
+                    and hope that no one changes a file and renames it withing a sync loop?
+                    Maybe running the local sync on a thread may help but this will lead to concurrency issue
+                    between the cloud and local)
+        - deleted (just delete obvs) - Most important to implement currently
+    - we need to figure our what and change the cloud accordingly
