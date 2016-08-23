@@ -6,6 +6,7 @@ import time
 import httplib2
 import oauth2client
 import apiclient
+from googleapiclient.errors import HttpError
 from oauth2client import client
 from oauth2client import tools
 from mimetypes import MimeTypes
@@ -55,8 +56,9 @@ class Authorization:
             print("Credentials are expired. Attempting to refresh...")
             try:
                 self.credentials.refresh()
-            except Exception:
+            except Exception, e:
                 print("Refresh failed.")
+                print e
         else:
             print("Found credentials in " + CREDENTIALS_FILE)
         return self.credentials
@@ -95,6 +97,7 @@ class FileManagement:
         return DRIVE_SERVICE.files().list(q="'{0}' in parents and trashed=false".format(folderId)).execute().get(
             'items', [])
 
+    # Currently unused
     def downloadAllFromFolder(self, folderId):
         file_list = self.getFileList(folderId)
         self.totalFiles += len(file_list)
@@ -140,11 +143,11 @@ class FileManagement:
 
         self.currentDriveFolder = 'root'
         paths = self.workingDirectory.split("/")
-        self.prevPath = ""
+        prevPath = ""
         for i in range((len(paths) - 2)):
-            self.prevPath += paths[i] + "/"
+            prevPath += paths[i] + "/"
         if not self.workingDirectory == SYNC_FOLDER:
-            self.setWorkingDirectory(self.prevPath)
+            self.setWorkingDirectory(prevPath)
 
     def localSyncAll(self, path):
         # for file in sync folder check if file is in db if not upload it and add id's and checksums to db
@@ -289,6 +292,24 @@ class FileManagement:
             self.dataBase.addToDataBase(uploadedMeta, path)
             self.filesUploaded += 1
 
+    def dataBaseSync(self):
+        # check the database for files/folders that have been deleted
+        self.dataBase.openFile("r")
+        for line in self.dataBase.file:
+            # get path, check if it exists, if not remove from cloud
+            path = line.split(",")[-1].strip("\n")
+            if not os.path.exists(path):
+                # File has been removed, renamed or moved
+                print "File or directory at: ", path, "no longer exists or has been moved"
+                id = self.dataBase.getIdFromPath(path)
+                if id is not None:
+                    try:
+                        DRIVE_SERVICE.files().trash(fileId=id).execute()  # Using trash over delete, just in case
+                    except HttpError, err:
+                        print err
+                    self.dataBase.removeFromDataBase(id)
+        self.dataBase.closeFile()
+
 
 class DataBaseManager:
     def __init__(self):
@@ -392,7 +413,9 @@ def run():
     while 1:
         try:
             start = time.time()
-            FM.cloudSyncAll('root')
+            FM.dataBaseSync()
+            # Run cloud sync on another thread and only sync every 5 mins or so
+            # FM.cloudSyncAll('root')
             FM.localSyncAll(SYNC_FOLDER)
             end = time.time()
             print('Sync Complete in {:.2f} seconds . {} new files downloaded.'

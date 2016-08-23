@@ -21,6 +21,7 @@
       <option name="ignoredNames">
         <list>
           <option value="file" />
+          <option value="id" />
         </list>
       </option>
     </inspection_tool>
