@@ -83,6 +83,7 @@ class FileManagement:
         self.filesUploaded = 0
         self.filesOverwritten = 0
         self.mime = MimeTypes()
+        self.currentDriveFileList = []
         # initialize database
         self.dataBase = DataBaseManager()
         global LOCAL_FILE_REMOVED
@@ -126,6 +127,8 @@ class FileManagement:
                     # not sure howto organize gdoc files as of yet
                     # only need add or remove stuff
                 else:
+                    # Add folderId to current drive list
+                    self.currentDriveFileList.append(doc['id'])
                     path = str(self.workingDirectory + doc['title'] + "/")
                     if not self.folderExists(path):
                         self.makeDirectory(path)
@@ -241,7 +244,7 @@ class FileManagement:
         # initiate overwrite --> update db with new md5 for specific id
         fileID = fileMeta['id']
         title = fileMeta['title']
-
+        self.currentDriveFileList.append(fileID)
         if self.fileExists(self.workingDirectory + title):
             if self.dataBase.isInDataBase(fileID):
                 storedMd5 = self.dataBase.getMd5(fileID)
@@ -292,22 +295,29 @@ class FileManagement:
             self.dataBase.addToDataBase(uploadedMeta, path)
             self.filesUploaded += 1
 
+    # check cloud here also, if a file is not in cloud but in db it means it has been deleted/moved/renamed
     def dataBaseSync(self):
         # check the database for files/folders that have been deleted
         self.dataBase.openFile("r")
         for line in self.dataBase.file:
             # get path, check if it exists, if not remove from cloud
-            path = line.split(",")[-1].strip("\n")
+            dbLine = line.split(",")
+            path = dbLine[-1].strip("\n")
+            id = dbLine[0]
             if not os.path.exists(path):
                 # File has been removed, renamed or moved
                 print "File or directory at: ", path, "no longer exists or has been moved"
-                id = self.dataBase.getIdFromPath(path)
-                if id is not None:
-                    try:
-                        DRIVE_SERVICE.files().trash(fileId=id).execute()  # Using trash over delete, just in case
-                    except HttpError, err:
-                        print err
-                    self.dataBase.removeFromDataBase(id)
+                try:
+                    DRIVE_SERVICE.files().trash(fileId=id).execute()  # Using trash over delete, just in case
+                except HttpError, err:
+                    print err
+                self.dataBase.removeFromDataBase(id)
+
+            # if the current id from the database is NOT in the cloud file list
+            if id not in self.currentDriveFileList:
+                print "A file has been deleted from drive, with id: ", id, " , deleting locally..."
+
+
         self.dataBase.closeFile()
 
 
@@ -413,10 +423,12 @@ def run():
     while 1:
         try:
             start = time.time()
-            FM.dataBaseSync()
             # Run cloud sync on another thread and only sync every 5 mins or so
-            # FM.cloudSyncAll('root')
+            FM.cloudSyncAll('root')
             FM.localSyncAll(SYNC_FOLDER)
+            FM.dataBaseSync()
+            # reset the drive list after were done so we can get fresh data
+            FM.currentDriveFileList = []
             end = time.time()
             print('Sync Complete in {:.2f} seconds . {} new files downloaded.'
                   ' {} new files uploaded. {} files updated.'.format(
