@@ -2,6 +2,7 @@ import hashlib
 import os
 import sys
 import time
+import threading
 
 import httplib2
 import oauth2client
@@ -233,10 +234,6 @@ class FileManagement:
     def getLocalMd5(self, fullPath):  # works perfectly returns the same md5s as google's
         if self.fileExists(fullPath):
             return hashlib.md5(open(fullPath, 'rb').read()).hexdigest()
-        else:
-            print("No File to hash, path: ", fullPath)
-            dirs = fullPath.split("/")
-            self.removeFromDrive('root', dirs[(len(dirs)) - 1])
 
     def cloudSync(self, fileMeta):  # not checking folder
         # check if cloud has new file --> initiate download
@@ -250,7 +247,7 @@ class FileManagement:
                 storedMd5 = self.dataBase.getMd5(fileID)
                 cloudMd5 = fileMeta['md5Checksum']
                 local = self.dataBase.getFilePath(fileID)
-                if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5:
+                if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5 and storedMd5 is not None:
                     self.downloadFile(fileMeta, self.workingDirectory)
                     self.dataBase.updateRecord(fileMeta, local)
                     self.filesOverwritten += 1
@@ -291,6 +288,7 @@ class FileManagement:
             body = {"title": os.path.basename(path), "mimeType": mimeType, 'parents': [{"id": parentID}]}
             mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
             uploadedMeta = DRIVE_SERVICE.files().insert(body=body, media_body=mediaBody).execute()
+            self.currentDriveFileList.append(uploadedMeta['id'])
             # Replace the meta with a folder that relates to the local files position
             self.dataBase.addToDataBase(uploadedMeta, path)
             self.filesUploaded += 1
@@ -313,10 +311,12 @@ class FileManagement:
                     print err
                 self.dataBase.removeFromDataBase(id)
 
-            # if the current id from the database is NOT in the cloud file list
-            if id not in self.currentDriveFileList:
-                print "A file has been deleted from drive, with id: ", id, " , deleting locally..."
-
+            # if the current id from the database is NOT in the cloud file list and the local file has not been edited
+            if id not in self.currentDriveFileList and self.dataBase.getMd5(id) is self.getLocalMd5(path):
+                print "A file has been deleted from drive, with id: ", id, " , deleting locally at : ", path
+                if os.path.exists(path):
+                    os.remove(path)
+                self.dataBase.removeFromDataBase(id)
 
         self.dataBase.closeFile()
 
@@ -420,19 +420,25 @@ def run():
     GA = Authorization()
     GA.initializeDriveService()
     FM = FileManagement()
+    start = time.time()
     while 1:
         try:
-            start = time.time()
+            # start = time.time()
             # Run cloud sync on another thread and only sync every 5 mins or so
-            FM.cloudSyncAll('root')
-            FM.localSyncAll(SYNC_FOLDER)
+            currentTime = time.time()
+            if(currentTime - start) > 10:
+                print "Syncing..."
+                syncStart = time.time()
+                FM.cloudSyncAll('root')
+                FM.localSyncAll(SYNC_FOLDER)
+                start = currentTime
+                print('Sync Complete in {:.2f} seconds . {} new files downloaded.'
+                      ' {} new files uploaded. {} files updated.'.format(
+                    (time.time() - syncStart), FM.filesDownloaded, FM.filesUploaded, FM.filesOverwritten))
             FM.dataBaseSync()
             # reset the drive list after were done so we can get fresh data
             FM.currentDriveFileList = []
-            end = time.time()
-            print('Sync Complete in {:.2f} seconds . {} new files downloaded.'
-                  ' {} new files uploaded. {} files updated.'.format(
-                (end - start), FM.filesDownloaded, FM.filesUploaded, FM.filesOverwritten))
+            # end = time.time()
             FM.filesDownloaded = 0
             FM.filesUploaded = 0
             FM.filesOverwritten = 0
