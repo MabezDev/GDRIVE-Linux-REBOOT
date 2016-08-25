@@ -6,15 +6,17 @@ and cloud store else we will get duplicate items (again having specific file ID'
 
 Todo:
  new function that checks the database for deleted files
-    - if the file is in the db but no longer exists in the stored path three things may have happened -DONE
-        - moved (if moved just delete and re upload in new place?)
+    - if the file is in the db but no longer exists in the stored path three things may have happened - [DONE]
+        - moved (if moved just delete and re upload in new place?) - [DONE] (Same as rename)
         - renamed   (tricky as our current methods (path and id) wil not work, perhaps the md5hash,
                     and hope that no one changes a file and renames it withing a sync loop?
                     Maybe running the local sync on a thread may help but this will lead to concurrency issue
-                    between the cloud and local)
-        - deleted (just delete obvs) - Most important to implement currently
-    - we need to figure our what and change the cloud accordingly - DONE
-    - Need to removed files and folders locally (pretty simple just need to implement proper code for dirs and files)
+                    between the cloud and local) - [DONE] (Just deleting and re uploading)
+        - deleted (just delete obvs) - Most important to implement currently - [DONE]
+    - we need to figure our what and change the cloud accordingly - [DONE]
+    - Need to removed files and folders locally (pretty simple just need to implement proper code for dirs and files) - [DONE]
+
+
     - figure out a more permanent solution for stopping files that have just been deleted or renamed being re downloaded
         from the cloud (currently we only sync every 10 seconds(will be longer on relase)), but if you change or delete
         a file during the cloud sync it will download the original file - solution is to check if its in the database
@@ -25,4 +27,8 @@ Todo:
           when cloud syncing we check if a file is in the databse and check if has been delted locally, if so don't dl
           and delte eventually and visa versa
 
-    - add support for inserting folders from local into drive (folder upload)
+        - Maybe another method is to download the metadata in one go instead of recursivly to decrease the time spent on the cloud (less chance of redownload doesnt fix)
+
+    - add support for inserting folders from local into drive (folder upload) - [DONE]
+
+    mb create a drive util class to handle the drive functions in a more concise manner

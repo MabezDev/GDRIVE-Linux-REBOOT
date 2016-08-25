@@ -2,6 +2,7 @@ import hashlib
 import os
 import sys
 import time
+import shutil
 
 import httplib2
 import oauth2client
@@ -157,26 +158,26 @@ class FileManagement:
         # for file in sync folder check if file is in db if not upload it and add id's and checksums to db
         # if file is folder call this function again recursively till be have checked all
         for (dirpath, dirnames, filenames) in walk(path):
-            if dirpath is SYNC_FOLDER:
-                # Sync folder will not have a id but when we upload not using an id it will go to root
-                for file in filenames:
-                    # check file is not a hidden one
-                    if not file.startswith("."):
-                        self.localSync(SYNC_FOLDER + file)
-            else:
-                # print "Folder at ", dirpath, "has id: ", self.dataBase.getIdFromPath(dirpath+ os.sep)
-                # Todo
-                # If folder is not in database, insert a folder on drive a add that to the database
-                for file in filenames:
-                    if not file.startswith("."):
-                        self.localSync(dirpath + os.sep + file)
+            fixedPath = os.path.join(dirpath, '')
+            # Sync folder will not have a id but when we upload not using an id it will go to root
+            for file in filenames:
+                # check file is not a hidden one
+                if not file.startswith("."):
+                    self.localSync(fixedPath + file)
 
-    def createFolderInDrive(self, title):
-        # need to implement this properly
-        folder = DRIVE_SERVICE.CreateFile(
-            {'title': '{0}'.format(title), 'mimeType': 'application/vnd.google-apps.folder',
-             "parents": [{"kind": "drive#fileLink", "id": self.currentDriveFolder}]})
-        folder.Upload()
+            if self.dataBase.getIdFromPath(fixedPath) is None and fixedPath is not SYNC_FOLDER:
+                parentFolder = os.path.join(os.path.dirname(os.path.dirname(fixedPath)), '')
+                parentID = self.dataBase.getIdFromPath(parentFolder)
+                if parentID is None:
+                    parentID = 'root'
+
+                print "New folder detected ,", fixedPath, "uploading to ", parentID, " in drive."
+                body = {"title": os.path.basename(dirpath),
+                        "mimeType": 'application/vnd.google-apps.folder',
+                        'parents': [{"id": parentID, "kind": "drive#fileLink"}]}
+                folderMeta = DRIVE_SERVICE.files().insert(body=body).execute()
+                self.currentDriveFileList.append(folderMeta['id'])
+                self.dataBase.addToDataBase(folderMeta, fixedPath)
 
     def setWorkingDirectory(self, path):
         self.workingDirectory = path
@@ -320,8 +321,13 @@ class FileManagement:
             if id not in self.currentDriveFileList:
                 print "A file has been deleted from drive, with id: ", id, " , deleting locally at : ", path
                 if os.path.exists(path):
+                    # Need to handle removing files folders and sub folders
                     # os.remove(path)
-                    print "Removing..."
+                    # print "Removing ", path, " ..."
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        os.remove(path)
                 self.dataBase.removeFromDataBase(id)
 
         self.dataBase.closeFile()
