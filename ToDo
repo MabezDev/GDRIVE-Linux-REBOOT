@@ -6,11 +6,23 @@ and cloud store else we will get duplicate items (again having specific file ID'
 
 Todo:
  new function that checks the database for deleted files
-    - if the file is in the db but no longer exists in the stored path three things may have happened
+    - if the file is in the db but no longer exists in the stored path three things may have happened -DONE
         - moved (if moved just delete and re upload in new place?)
         - renamed   (tricky as our current methods (path and id) wil not work, perhaps the md5hash,
                     and hope that no one changes a file and renames it withing a sync loop?
                     Maybe running the local sync on a thread may help but this will lead to concurrency issue
                     between the cloud and local)
         - deleted (just delete obvs) - Most important to implement currently
-    - we need to figure our what and change the cloud accordingly
+    - we need to figure our what and change the cloud accordingly - DONE
+    - Need to removed files and folders locally (pretty simple just need to implement proper code for dirs and files)
+    - figure out a more permanent solution for stopping files that have just been deleted or renamed being re downloaded
+        from the cloud (currently we only sync every 10 seconds(will be longer on relase)), but if you change or delete
+        a file during the cloud sync it will download the original file - solution is to check if its in the database
+        instead of check if it exists - probably not possible may need to implement solution below
+
+        - Add database support to keep records till a file is deleted from both cloud and local, once both are deleted
+          the record can be deleted (Will mean items wont update as quickly but should stop the download problem), then
+          when cloud syncing we check if a file is in the databse and check if has been delted locally, if so don't dl
+          and delte eventually and visa versa
+
+    - add support for inserting folders from local into drive (folder upload)

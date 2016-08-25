@@ -2,7 +2,6 @@ import hashlib
 import os
 import sys
 import time
-import threading
 
 import httplib2
 import oauth2client
@@ -42,6 +41,7 @@ CONFIG = RES_FOLDER + "config.ini"
 class Authorization:
     def __init__(self):
         self.store = None
+        self.http = httplib2.Http()
         self.credentials = self.loadCredentials()
         self.initializeDriveService()
 
@@ -56,7 +56,7 @@ class Authorization:
         elif self.credentials.access_token_expired:
             print("Credentials are expired. Attempting to refresh...")
             try:
-                self.credentials.refresh()
+                self.credentials.refresh(self.http)
             except Exception, e:
                 print("Refresh failed.")
                 print e
@@ -65,8 +65,7 @@ class Authorization:
         return self.credentials
 
     def initializeDriveService(self):
-        http = httplib2.Http()
-        http = self.credentials.authorize(http)
+        http = self.credentials.authorize(self.http)
         global DRIVE_SERVICE
         DRIVE_SERVICE = apiclient.discovery.build("drive", "v2", http=http)
 
@@ -128,8 +127,6 @@ class FileManagement:
                     # not sure howto organize gdoc files as of yet
                     # only need add or remove stuff
                 else:
-                    # Add folderId to current drive list
-                    self.currentDriveFileList.append(doc['id'])
                     path = str(self.workingDirectory + doc['title'] + "/")
                     if not self.folderExists(path):
                         self.makeDirectory(path)
@@ -137,6 +134,9 @@ class FileManagement:
                     # Add folder to database
                     if not self.dataBase.isInDataBase(doc['id']):
                         self.dataBase.addToDataBase(doc, path)
+
+                    # Add folderId to current drive list
+                    self.currentDriveFileList.append(doc['id'])
 
                     self.totalFiles -= 1
                     self.setWorkingDirectory(path)
@@ -197,8 +197,6 @@ class FileManagement:
             f.close()
         else:
             print("Error downloading file. No content detected.")
-        # add to data base
-        self.dataBase.addToDataBase(fileMeta, fullPath)
         # increase tally
         self.Downloaded += 1
 
@@ -247,7 +245,7 @@ class FileManagement:
                 storedMd5 = self.dataBase.getMd5(fileID)
                 cloudMd5 = fileMeta['md5Checksum']
                 local = self.dataBase.getFilePath(fileID)
-                if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5 and storedMd5 is not None:
+                if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5:
                     self.downloadFile(fileMeta, self.workingDirectory)
                     self.dataBase.updateRecord(fileMeta, local)
                     self.filesOverwritten += 1
@@ -261,6 +259,8 @@ class FileManagement:
                     # platforms
             else:
                 self.downloadFile(fileMeta, self.workingDirectory)
+                # add to data base
+                self.dataBase.addToDataBase(fileMeta, self.workingDirectory + fileMeta['title'])
                 self.filesDownloaded += 1
 
     def localSync(self, path):
@@ -274,7 +274,9 @@ class FileManagement:
             if currentMd5 != dbMd5:
                 # This file has changed update it!
                 print "A change has been detected in ", path
-                mimeType = self.mime.guess_type(path)  # Get mimeType from local file
+                mimeType, enc = self.mime.guess_type(path)  # Get mimeType from local file
+                if mimeType is None:
+                    mimeType = "text/plain"
                 body = {'parents': [{"id": parentID}]}
                 mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
                 editedFile = DRIVE_SERVICE.files().update(fileId=fileID, body=body, media_body=mediaBody).execute()
@@ -283,7 +285,9 @@ class FileManagement:
 
         else:
             # New file detected, upload it here!
-            mimeType = self.mime.guess_type(path)  # Get mimeType from local file
+            mimeType, enc = self.mime.guess_type(path)  # Get mimeType from local file
+            if mimeType is None:
+                mimeType = "text/plain"
             print "A new file detected with mimeType {} here: ".format(mimeType), path
             body = {"title": os.path.basename(path), "mimeType": mimeType, 'parents': [{"id": parentID}]}
             mediaBody = apiclient.http.MediaFileUpload(path, mimeType, resumable=True)
@@ -312,10 +316,12 @@ class FileManagement:
                 self.dataBase.removeFromDataBase(id)
 
             # if the current id from the database is NOT in the cloud file list and the local file has not been edited
-            if id not in self.currentDriveFileList and self.dataBase.getMd5(id) is self.getLocalMd5(path):
+            #  and self.dataBase.getMd5(id) is self.getLocalMd5(path) # needs testing
+            if id not in self.currentDriveFileList:
                 print "A file has been deleted from drive, with id: ", id, " , deleting locally at : ", path
                 if os.path.exists(path):
-                    os.remove(path)
+                    # os.remove(path)
+                    print "Removing..."
                 self.dataBase.removeFromDataBase(id)
 
         self.dataBase.closeFile()
@@ -417,9 +423,19 @@ class DataBaseManager:
 
 
 def run():
+    print "GDrive client initializing..."
     GA = Authorization()
     GA.initializeDriveService()
+    print "Authorisation complete."
     FM = FileManagement()
+    print "File Manager initialized."
+    print "Refreshing drive caches and local databases..."
+    # Do initial sync to load caches
+    FM.cloudSyncAll('root')
+    FM.localSyncAll(SYNC_FOLDER)
+    FM.dataBaseSync()
+    print "Done!"
+    print "Initialization complete!"
     start = time.time()
     while 1:
         try:
@@ -428,6 +444,7 @@ def run():
             currentTime = time.time()
             if(currentTime - start) > 10:
                 print "Syncing..."
+                FM.currentDriveFileList = []
                 syncStart = time.time()
                 FM.cloudSyncAll('root')
                 FM.localSyncAll(SYNC_FOLDER)
@@ -437,7 +454,6 @@ def run():
                     (time.time() - syncStart), FM.filesDownloaded, FM.filesUploaded, FM.filesOverwritten))
             FM.dataBaseSync()
             # reset the drive list after were done so we can get fresh data
-            FM.currentDriveFileList = []
             # end = time.time()
             FM.filesDownloaded = 0
             FM.filesUploaded = 0
