@@ -25,7 +25,10 @@ Todo:
         - Add database support to keep records till a file is deleted from both cloud and local, once both are deleted
           the record can be deleted (Will mean items wont update as quickly but should stop the download problem), then
           when cloud syncing we check if a file is in the databse and check if has been delted locally, if so don't dl
-          and delte eventually and visa versa
+          and deleted eventually and visa versa - doesnt work because the database is not updated whilst were cloud syncing - [FAIL]
+          - but we should be able to add to queue of downloads then download if the file is not deleted
+            (if file is missing and database says file is deleted (the flag system from before)) then dont download
+          - (26/8/2016) - implemented the database deletion structure, need to add the download queue system
 
         - Maybe another method is to download the metadata in one go instead of recursivly to decrease the time spent on the cloud (less chance of redownload doesnt fix)
 

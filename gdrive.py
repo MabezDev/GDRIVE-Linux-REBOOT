@@ -4,6 +4,7 @@ import sys
 import time
 import shutil
 
+import datetime
 import httplib2
 import oauth2client
 import apiclient
@@ -92,12 +93,66 @@ class FileManagement:
         global LOCAL_FILE_ADDED
         LOCAL_FILE_ADDED = []
 
-    def downloadAll(self):
-        self.downloadAllFromFolder("root")
-
-    def getFileList(self, folderId):
+    @staticmethod
+    def getFileList(folderId):
         return DRIVE_SERVICE.files().list(q="'{0}' in parents and trashed=false".format(folderId)).execute().get(
             'items', [])
+
+    @staticmethod
+    def folderExists(folder):
+        return os.path.isdir(folder)
+
+    @staticmethod
+    def fileExists(fileLocation):
+        return os.path.isfile(fileLocation)
+
+    @staticmethod
+    def makeDirectory(path):
+        os.mkdir(path)
+
+    def setWorkingDirectory(self, path):
+        self.workingDirectory = path
+
+    def getLocalMd5(self, fullPath):  # works perfectly returns the same md5s as google's
+        if self.fileExists(fullPath):
+            return hashlib.md5(open(fullPath, 'rb').read()).hexdigest()
+
+    def downloadFile(self, fileMeta, folder):
+        fullPath = folder + fileMeta['title']
+        if not self.folderExists(folder):
+            self.makeDirectory(folder)
+        # print("Downloading {0} with id {1}".format(fileMeta['title'],fileMeta['id']))
+        print("Downloading From Drive: ", fileMeta['title'])
+        fileDownload = fileMeta.get('downloadUrl')
+        if fileDownload:
+            resp, content = DRIVE_SERVICE._http.request(fileDownload)
+            if resp.status == 200:
+                print('Status: %s' % resp)
+            f = open(fullPath, "w")  # write content to file
+            f.write(content)
+            f.close()
+        else:
+            print("Error downloading file. No content detected.")
+        # increase tally
+        self.Downloaded += 1
+
+    # Need to implement this across OS's (this works on fedora currently)
+    def downloadGDriveFile(self, fileMeta, folder):
+        fullPath = folder + fileMeta['title'] + ".desktop"
+        shortcutImg = RES_FOLDER + "doc.png"
+        end = "\n"
+        if not self.folderExists(folder):
+            self.makeDirectory(folder)
+        if not self.fileExists(fullPath):
+            f = open(fullPath, "w")
+            f.write("[Desktop Entry]" + end)
+            f.write("Encoding=UTF-8" + end)
+            f.write("Name=" + fileMeta['title'] + end)
+            f.write("Type=Link" + end)
+            f.write("URL=" + fileMeta['alternateLink'] + end)
+            f.write("Icon=" + shortcutImg + end)
+            f.close()
+            self.Downloaded += 1
 
     # Currently unused
     def downloadAllFromFolder(self, folderId):
@@ -131,6 +186,7 @@ class FileManagement:
                     path = str(self.workingDirectory + doc['title'] + "/")
                     if not self.folderExists(path):
                         self.makeDirectory(path)
+                        print "New Folder in drive, id: ", doc['id'], " path: ", path
 
                     # Add folder to database
                     if not self.dataBase.isInDataBase(doc['id']):
@@ -153,6 +209,36 @@ class FileManagement:
             prevPath += paths[i] + "/"
         if not self.workingDirectory == SYNC_FOLDER:
             self.setWorkingDirectory(prevPath)
+
+    def cloudSync(self, fileMeta):  # not checking folder
+        # check if cloud has new file --> initiate download
+        # if cloudMd5!=dbmd5 && dbmd5==localmd5 cloud has changed -->
+        # initiate overwrite --> update db with new md5 for specific id
+        fileID = fileMeta['id']
+        title = fileMeta['title']
+        self.currentDriveFileList.append(fileID)
+        if self.dataBase.isInDataBase(fileID):
+            if self.fileExists(self.workingDirectory + title):
+                storedMd5 = self.dataBase.getMd5(fileID)
+                cloudMd5 = fileMeta['md5Checksum']
+                local = self.dataBase.getFilePath(fileID)
+                if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5:
+                    self.downloadFile(fileMeta, self.workingDirectory)
+                    self.dataBase.updateRecord(fileMeta, local)
+                    self.filesOverwritten += 1
+        else:
+            # new file --> download it
+            if "application/vnd.google-apps." in fileMeta['mimeType']:
+                if not fileMeta['mimeType'] == "application/vnd.google-apps.folder":
+                    pass
+                    # self.downloadGDriveFile(doc,self.workingDirectory)
+                    # not sure what to do with GDoc files yet as they need to be implemented across
+                    # platforms
+            else:
+                self.downloadFile(fileMeta, self.workingDirectory)
+                # add to data base
+                self.dataBase.addToDataBase(fileMeta, self.workingDirectory + fileMeta['title'])
+                self.filesDownloaded += 1
 
     def localSyncAll(self, path):
         # for file in sync folder check if file is in db if not upload it and add id's and checksums to db
@@ -178,91 +264,6 @@ class FileManagement:
                 folderMeta = DRIVE_SERVICE.files().insert(body=body).execute()
                 self.currentDriveFileList.append(folderMeta['id'])
                 self.dataBase.addToDataBase(folderMeta, fixedPath)
-
-    def setWorkingDirectory(self, path):
-        self.workingDirectory = path
-
-    def downloadFile(self, fileMeta, folder):
-        fullPath = folder + fileMeta['title']
-        if not self.folderExists(folder):
-            self.makeDirectory(folder)
-        # print("Downloading {0} with id {1}".format(fileMeta['title'],fileMeta['id']))
-        print("Downloading From Drive: ", fileMeta['title'])
-        fileDownload = fileMeta.get('downloadUrl')
-        if fileDownload:
-            resp, content = DRIVE_SERVICE._http.request(fileDownload)
-            if resp.status == 200:
-                print('Status: %s' % resp)
-            f = open(fullPath, "w")  # write content to file
-            f.write(content)
-            f.close()
-        else:
-            print("Error downloading file. No content detected.")
-        # increase tally
-        self.Downloaded += 1
-
-    def downloadGDriveFile(self, fileMeta, folder):
-        fullPath = folder + fileMeta['title'] + ".desktop"
-        shortcutImg = RES_FOLDER + "doc.png"
-        end = "\n"
-        if not self.folderExists(folder):
-            self.makeDirectory(folder)
-        if not self.fileExists(fullPath):
-            f = open(fullPath, "w")
-            f.write("[Desktop Entry]" + end)
-            f.write("Encoding=UTF-8" + end)
-            f.write("Name=" + fileMeta['title'] + end)
-            f.write("Type=Link" + end)
-            f.write("URL=" + fileMeta['alternateLink'] + end)
-            f.write("Icon=" + shortcutImg + end)
-            f.close()
-            self.Downloaded += 1
-
-    @staticmethod
-    def folderExists(folder):
-        return os.path.isdir(folder)
-
-    @staticmethod
-    def fileExists(fileLocation):
-        return os.path.isfile(fileLocation)
-
-    @staticmethod
-    def makeDirectory(path):
-        os.mkdir(path)
-
-    def getLocalMd5(self, fullPath):  # works perfectly returns the same md5s as google's
-        if self.fileExists(fullPath):
-            return hashlib.md5(open(fullPath, 'rb').read()).hexdigest()
-
-    def cloudSync(self, fileMeta):  # not checking folder
-        # check if cloud has new file --> initiate download
-        # if cloudMd5!=dbmd5 && dbmd5==localmd5 cloud has changed -->
-        # initiate overwrite --> update db with new md5 for specific id
-        fileID = fileMeta['id']
-        title = fileMeta['title']
-        self.currentDriveFileList.append(fileID)
-        if self.fileExists(self.workingDirectory + title):
-            if self.dataBase.isInDataBase(fileID):
-                storedMd5 = self.dataBase.getMd5(fileID)
-                cloudMd5 = fileMeta['md5Checksum']
-                local = self.dataBase.getFilePath(fileID)
-                if cloudMd5 != storedMd5 and self.getLocalMd5(local) == storedMd5:
-                    self.downloadFile(fileMeta, self.workingDirectory)
-                    self.dataBase.updateRecord(fileMeta, local)
-                    self.filesOverwritten += 1
-        else:
-            # new file --> download it
-            if "application/vnd.google-apps." in fileMeta['mimeType']:
-                if not fileMeta['mimeType'] == "application/vnd.google-apps.folder":
-                    pass
-                    # self.downloadGDriveFile(doc,self.workingDirectory)
-                    # not sure what to do with GDoc files yet as they need to be implemented across
-                    # platforms
-            else:
-                self.downloadFile(fileMeta, self.workingDirectory)
-                # add to data base
-                self.dataBase.addToDataBase(fileMeta, self.workingDirectory + fileMeta['title'])
-                self.filesDownloaded += 1
 
     def localSync(self, path):
         # Check if path is directory or file
@@ -310,10 +311,12 @@ class FileManagement:
             if not os.path.exists(path):
                 # File has been removed, renamed or moved
                 print "File or directory at: ", path, "no longer exists or has been moved"
+                self.dataBase.setDeleted(id)
                 try:
                     DRIVE_SERVICE.files().trash(fileId=id).execute()  # Using trash over delete, just in case
                 except HttpError, err:
                     print err
+                # Add set deleted local to true
                 self.dataBase.removeFromDataBase(id)
 
             # if the current id from the database is NOT in the cloud file list and the local file has not been edited
@@ -328,9 +331,23 @@ class FileManagement:
                         shutil.rmtree(path, ignore_errors=True)
                     else:
                         os.remove(path)
+                    # Add set deleted cloud to true
                 self.dataBase.removeFromDataBase(id)
 
         self.dataBase.closeFile()
+
+    # DataBase File structure:
+    #
+    # drive_id, parent_id, md5 hash from drive (NONE if not available), mimeType, localPath
+    # Proposed data structure to fix re download problem:
+    # drive_id, parent_id, md5 hash from drive (NONE if not available), mimeType,
+    #         deletedLocal (true or false), deletedCloud (true or false), localPath
+    #
+    #   Ideology~
+    #
+    #   Local: If the path is detected missing, set deleted flag to true
+    #   Cloud: If id is missing set false to true
+    #   Syncing: check if in db like normal but db sync checks that both are true then removed the record from the db
 
 
 class DataBaseManager:
@@ -343,14 +360,20 @@ class DataBaseManager:
         self.file = open(DB_FILE, "r")
         self.closeFile()
 
-    def addToDataBase(self, fileMeta, fullPath):
+    def addToDataBase(self, fileMeta, fullPath, deleted="false"):
         self.openFile("a+")
         if os.path.isfile(fullPath):
             md5 = str(fileMeta['md5Checksum'])
         else:
             md5 = "NONE"
         string = str(fileMeta['id']) + "," + str(fileMeta['parents'][0]['id']) + "," + md5 + \
-                 "," + str(fileMeta['mimeType']) + "," + fullPath + "\n"
+                 "," + str(fileMeta['mimeType']) + "," + deleted + "," + fullPath + "\n"
+        self.file.write(string)
+        self.closeFile()
+
+    def addToDataBaseManual(self, id, parent, md5, mimeType, deleted, fullPath):
+        self.openFile("a+")
+        string = id + "," + parent + "," + md5 + "," + mimeType + "," + deleted + "," + fullPath + "\n"
         self.file.write(string)
         self.closeFile()
 
@@ -359,6 +382,7 @@ class DataBaseManager:
         for line in self.file:
             id1 = line.split(",")
             if id1[0] == fileID:
+                self.closeFile()
                 return True
         self.closeFile()
         return False
@@ -369,11 +393,11 @@ class DataBaseManager:
     def closeFile(self):
         self.file.close()
 
-    def updateRecord(self, fileMeta, fullPath):
+    def updateRecord(self, fileMeta, fullPath, deleted="false"):
         # remove it
         self.removeFromDataBase(fileMeta['id'])
         # re-add it with the new md5
-        self.addToDataBase(fileMeta, fullPath)
+        self.addToDataBase(fileMeta, fullPath, deleted)
 
     def getMd5(self, fileID):
         # find md5 in file form id
@@ -385,20 +409,44 @@ class DataBaseManager:
                 return id1[2]
         self.closeFile()
 
+    def isDeleted(self, fileID):
+        self.openFile("r")
+        for line in self.file:
+            id1 = line.split(",")
+            if id1[0] == fileID:
+                print id1[4]
+                if id1[4] is "true":
+                    self.closeFile()
+                    return True
+        self.closeFile()
+        return False
+
+    def setDeleted(self, fileID):
+        self.openFile("r")
+        line = None
+        for line in self.file:
+            id1 = line.split(",")
+            if id1[0] == fileID:
+                line = id1
+        self.closeFile()
+        if line is not None:
+            self.removeFromDataBase(fileID)
+            self.addToDataBaseManual(line[0], line[1], line[2], line[3], "true", line[5].strip("\n"))
+
     def getFilePath(self, fileID):
         self.openFile("r")
         for line in self.file:
             id1 = line.split(",")
             if id1[0] == fileID:
-                return id1[4].strip("\n")
+                return id1[-1].strip("\n")
         self.closeFile()
 
-    # Can be used to get parent folder id's (Needs testing)
+    # Can be used to get parent folder id's
     def getIdFromPath(self, fullPath):
         self.openFile("r")
         for line in self.file:
             id1 = line.split(",")
-            if id1[4].strip("\n") == fullPath:
+            if id1[-1].strip("\n") == fullPath:
                 return id1[0]
         self.closeFile()
 
@@ -413,7 +461,7 @@ class DataBaseManager:
         self.openFile("r")
         for line in self.file:
             id1 = line.split(",")
-            if id1[4].strip("\n") == path:
+            if id1[-1].strip("\n") == path:
                 return id1[3]
         self.closeFile()
 
@@ -442,6 +490,7 @@ def run():
     FM.dataBaseSync()
     print "Done!"
     print "Initialization complete!"
+    print ""
     start = time.time()
     while 1:
         try:
@@ -449,23 +498,28 @@ def run():
             # Run cloud sync on another thread and only sync every 5 mins or so
             currentTime = time.time()
             if(currentTime - start) > 10:
-                print "Syncing..."
+                # Reset the drive list after were done so we can get fresh data
                 FM.currentDriveFileList = []
+                sys.stdout.write("\r"+"[" + datetime.datetime.now().time().strftime('%H:%M:%S') + "]: "+" Syncing..."),
                 syncStart = time.time()
                 FM.cloudSyncAll('root')
                 FM.localSyncAll(SYNC_FOLDER)
                 start = currentTime
-                print('Sync Complete in {:.2f} seconds . {} new files downloaded.'
-                      ' {} new files uploaded. {} files updated.'.format(
-                    (time.time() - syncStart), FM.filesDownloaded, FM.filesUploaded, FM.filesOverwritten))
+                sys.stdout.write("\r" + "[" + datetime.datetime.now().time().strftime('%H:%M:%S') + "]: " +
+                                 "Sync Complete in {:.2f} seconds. {} new files downloaded. "
+                                 "{} new files uploaded. {} files updated.".format(
+                                 (time.time() - syncStart), FM.filesDownloaded, FM.filesUploaded, FM.filesOverwritten))
+                sys.stdout.flush()
             FM.dataBaseSync()
-            # reset the drive list after were done so we can get fresh data
-            # end = time.time()
+
             FM.filesDownloaded = 0
             FM.filesUploaded = 0
             FM.filesOverwritten = 0
             # time.sleep(5)
         except KeyboardInterrupt:
+            break
+        except Exception, e:
+            print e
             break
         finally:
             FM.dataBase.closeFile()
@@ -473,7 +527,6 @@ def run():
 
 if __name__ == "__main__":  # load settings like filepath etc, if its not there use add sys arguments to determine sync folder etc
     arguments = sys.argv
-    print(arguments)
     if len(arguments) > 1:
         sync = arguments[1]
         print('Arguments given: ', sync)
